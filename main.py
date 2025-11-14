@@ -28,7 +28,6 @@ db_connection.row_factory = sqlite3.Row
 
 
 def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime.datetime]:
-    """Parse an ISO datetime string into a datetime, return None on failure."""
     if not value:
         return None
     try:
@@ -42,7 +41,6 @@ def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime.datetime]:
 
 
 def _format_reminders(reminders: List[Dict[str, Any]]) -> str:
-    """Return a human-friendly string representation of reminders."""
     if not reminders:
         return "— Нет напоминаний —"
     header = f"{'ID':>4} | {'Время':<16} | Текст"
@@ -63,8 +61,6 @@ def _format_reminders(reminders: List[Dict[str, Any]]) -> str:
 
 
 async def db_setup() -> None:
-    """Create the Reminders table if it doesn't exist. Runs in a thread pool to avoid blocking."""
-
     def _setup():
         cur = db_connection.cursor()
         cur.execute(
@@ -84,8 +80,6 @@ CREATE TABLE IF NOT EXISTS Reminders (
 
 
 async def db_fetch_user_reminders(userid: int) -> List[Dict[str, Any]]:
-    """Return list of reminders for a user as dicts."""
-
     def _fetch():
         cur = db_connection.cursor()
         cur.execute(
@@ -99,8 +93,6 @@ async def db_fetch_user_reminders(userid: int) -> List[Dict[str, Any]]:
 
 
 async def db_fetch_all_reminders() -> List[Dict[str, Any]]:
-    """Fetch all reminders from the database as a list of dicts."""
-
     def _fetch_all():
         cur = db_connection.cursor()
         cur.execute("SELECT id, timestamp, text, userid FROM Reminders")
@@ -111,8 +103,6 @@ async def db_fetch_all_reminders() -> List[Dict[str, Any]]:
 
 
 async def db_execute(sql: str, params: tuple = ()) -> int:
-    """Execute an UPDATE/INSERT/DELETE and return lastrowid. Runs in executor."""
-
     def _exec():
         cur = db_connection.cursor()
         cur.execute(sql, params)
@@ -136,16 +126,11 @@ else:
 
 
 async def ai_request(reminders: List[Dict[str, Any]], user_input: str) -> str:
-    """Send a request to the AI and return the raw text output.
-
-    reminders: list of dicts returned from `db_fetch_user_reminders`.
-    """
     reminders_text = json.dumps(reminders, default=str, ensure_ascii=False)
     if not ai_client:
         raise RuntimeError("AI client not configured (OPENROUTER_API_KEY missing)")
 
     def _call_ai() -> str:
-        # Synchronous call to the OpenAI client; run in executor to avoid blocking
         resp = ai_client.responses.create(
             model="tngtech/deepseek-r1t2-chimera:free",
             input=[
@@ -278,11 +263,9 @@ async def ai_request(reminders: List[Dict[str, Any]], user_input: str) -> str:
 
 
 async def _send_reminder_to_user(reminder: Dict[str, Any]) -> bool:
-    """Send a reminder message to the user. Returns True on success."""
     uid = reminder.get("userid")
     text = reminder.get("text")
     ts = reminder.get("timestamp")
-    # Normalize timestamp for display
     if isinstance(ts, str):
         ts_display = ts
     elif isinstance(ts, datetime.datetime):
@@ -292,7 +275,6 @@ async def _send_reminder_to_user(reminder: Dict[str, Any]) -> bool:
 
     message = f"⏰ Напоминание:\n{ts_display} — {text}"
     try:
-        # Assume chat_id == userid; change if your platform uses different ids
         await max_bot.send_message(chat_id=uid, text=message)
         return True
     except Exception:
@@ -301,11 +283,6 @@ async def _send_reminder_to_user(reminder: Dict[str, Any]) -> bool:
 
 
 async def check_due_reminders_loop(poll_interval_seconds: int = 5):
-    """Background loop that checks for due reminders and sends them.
-
-    This function fetches all reminders, filters those whose timestamp <= now,
-    sends them and deletes sent reminders from the DB.
-    """
     logger.info("Starting reminders checker (interval=%s sec)", poll_interval_seconds)
     try:
         while True:
@@ -331,7 +308,6 @@ async def check_due_reminders_loop(poll_interval_seconds: int = 5):
                 for r, parsed in due:
                     sent = await _send_reminder_to_user(r)
                     if sent:
-                        # delete the reminder
                         await db_execute(
                             "DELETE FROM Reminders WHERE id = ?", (r.get("id"),)
                         )
@@ -354,15 +330,12 @@ max_dispatcher = Dispatcher()
 
 
 def _validate_startup_config() -> None:
-    """Validate important environment variables and exit early if required ones are missing."""
-    # Require bot token — without it the bot cannot run
     bot_token = MAXBOT_TOKEN
     if not bot_token:
         logger.error("MAXBOT_TOKEN is not set. Exiting.")
         print("ERROR: please set MAXBOT_TOKEN environment variable.")
         sys.exit(2)
-
-    # AI key is optional for read-only operations, but warn if missing
+        
     if not OPENROUTER_API_KEY:
         logger.warning("OPENROUTER_API_KEY not set — AI features will be disabled.")
 
@@ -379,7 +352,6 @@ async def max_on_start_command(event: MessageCreated):
 
 @max_dispatcher.message_created()
 async def max_on_message(event: MessageCreated):
-    # Load reminders and call AI to interpret the user's message
     reminders = await db_fetch_user_reminders(event.chat.chat_id)
 
     try:
@@ -398,13 +370,11 @@ async def max_on_message(event: MessageCreated):
 
     action_type = j.get("type")
 
-    # Handle List: show current reminders
     if action_type == "List":
         formatted = _format_reminders(reminders)
         await event.message.answer(f"📋 Напоминания ({len(reminders)}):\n\n{formatted}")
         return
 
-    # For DB-modifying actions, apply changes via executor helper
     try:
         if action_type == "Add":
             dt = j.get("datetime")
@@ -472,17 +442,14 @@ async def max_on_message(event: MessageCreated):
 
 
 async def main():
-    # Validate config, ensure DB schema exists, then start polling and background checker
     _validate_startup_config()
     await db_setup()
 
-    # Start background reminders checker
     checker_task = asyncio.create_task(check_due_reminders_loop())
 
     try:
         await max_dispatcher.start_polling(max_bot)
     finally:
-        # Stop checker gracefully
         checker_task.cancel()
         try:
             await checker_task
