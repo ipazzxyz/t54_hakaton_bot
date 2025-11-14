@@ -17,4 +17,4 @@ MAXBOT_TOKEN="токен"
 2. Запустить контейнер
    `docker run t54_hakaton_bot`
 
-В одну строку: `docker build -t t54_hakaton_bot .&& docker run t54_hakaton_bot`
+В одну строку: `docker build -t t54_hakaton_bot . && docker run t54_hakaton_bot`
